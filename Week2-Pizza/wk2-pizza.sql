@@ -216,7 +216,22 @@ order by runner_id, order_id;
 	-- runners are slowing down with subsequent deliveries
 
 -- 7. What is the successful delivery percentage for each runner?
-
+select a.runner_id,
+	a.count,
+	b.count,
+	round(100 * (b.count/a.count), 2) as percent_success
+from (
+	select r.runner_id,
+			cast(count(*) as decimal(5,2))
+	from pizza_runner.runner_orders r 
+	group by runner_id) a
+inner join (
+	select r.runner_id,
+		cast(count(*) as decimal(5,2))
+	from pizza_runner.runner_orders r 
+	where r.pickup_time != 'null'
+	group by runner_id) b
+on a.runner_id = b.runner_id;
 
 
 /* --------------------
@@ -224,8 +239,121 @@ C. Ingredient Optimisation
    --------------------*/
    
 -- 1. What are the standard ingredients for each pizza?
+select max(array_length(regexp_split_to_array(toppings,','),1))  
+from pizza_runner.pizza_recipes;
+--8
+  
+create table pizza_long as
+with ptops as (
+	SELECT pizza_id
+		 , split_part(toppings, ',', 1) AS col1
+		 , split_part(toppings, ',', 2) AS col2
+		 , split_part(toppings, ',', 3) AS col3
+		 , split_part(toppings, ',', 4) AS col4
+		 , split_part(toppings, ',', 5) AS col5
+		 , split_part(toppings, ',', 6) AS col6
+		 , split_part(toppings, ',', 7) AS col7
+		 , split_part(toppings, ',', 8) AS col8
+	FROM   pizza_runner.pizza_recipes
+)
+select p.pizza_id, m.*
+from ptops p
+  cross join lateral (
+    values (p.col1, 'col1'),
+           (p.col2, 'col2'),
+           (p.col3, 'col3'),
+           (p.col4, 'col4'),
+           (p.col5, 'col5'),
+           (p.col6, 'col6'),
+           (p.col7, 'col7'),
+           (p.col8, 'col8')
+  ) as m(topping_id, col_name);
+
+
+select p.pizza_id,
+	p.topping_id,
+	t.topping_name
+from 
+	(select pizza_id, cast(topping_id as numeric)
+	from pizza_long
+	where topping_id != '') as p
+inner join pizza_runner.pizza_toppings t
+on p.topping_id = t.topping_id
+--group by p.pizza_id
+order by p.pizza_id, p.topping_id
+;
+
+
+/* Common standard topping
+select p.topping_id,
+	t.topping_name, 
+	count(*)
+from 
+	(select pizza_id, cast(topping_id as numeric)
+	from pizza_long
+	where topping_id != '') as p
+inner join pizza_runner.pizza_toppings t
+on p.topping_id = t.topping_id
+group by  
+	p.topping_id,
+	t.topping_name
+order by count desc ;
+*/
+
 -- 2. What was the most commonly added extra?
+create table t as
+select 
+	split_part(extras, ',',1) as col1
+    , split_part(extras, ',',2) as col2
+from pizza_runner.customer_orders
+where extras not in ('', 'null');
+
+select pt.topping_name,
+	count(*)
+from
+	(select cast(e.topping_id as numeric)
+	from t
+		 cross join lateral (
+		   values (t.col1, 'col1'),
+				   (t.col2, 'col2')
+		  ) as e(topping_id, col_name)
+	 where topping_id <> ''
+	 ) e
+inner join pizza_runner.pizza_toppings pt
+on e.topping_id = pt.topping_id
+group by pt. topping_name
+order by count desc
+limit 1
+;
+
 -- 3. What was the most common exclusion?
+create table t as
+select 
+	split_part(exclusions, ',',1) as col1
+    , split_part(exclusions, ',',2) as col2
+from pizza_runner.customer_orders
+where exclusions not in ('', 'null');
+
+select pt.topping_name,
+	count(*)
+from
+	(select cast(e.topping_id as numeric)
+	from t
+		 cross join lateral (
+		   values (t.col1, 'col1'),
+				   (t.col2, 'col2')
+		  ) as e(topping_id, col_name)
+	 where topping_id <> ''
+	 ) e
+inner join pizza_runner.pizza_toppings pt
+on e.topping_id = pt.topping_id
+group by pt. topping_name
+order by count desc
+limit 1
+;
+
+
+
 -- 4. Generate an order item for each record in the customers_orders table in the format of one of the following:
 /*Meat Lovers
 Meat Lovers - Exclude Beef
