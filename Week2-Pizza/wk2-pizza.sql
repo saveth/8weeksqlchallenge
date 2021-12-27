@@ -359,6 +359,62 @@ limit 1
 Meat Lovers - Exclude Beef
 Meat Lovers - Extra Bacon
 Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers */
+
+create table t as
+select * 
+	, split_part(exclusions, ',',1) as exc1
+    , split_part(exclusions, ',',2) as exc2
+    , split_part(extras, ',',1) as ext1
+    , split_part(extras, ',',2) as ext2
+from pizza_runner.customer_orders
+;
+
+
+update t
+set exc1 = nullif(regexp_replace(exc1, '[^0-9.]', '', 'g'), '')::int,
+	exc2 = nullif(exc2, '')::int,
+	ext1 = nullif(regexp_replace(ext1, '[^0-9.]', '', 'g'), '')::int,
+	ext2 = nullif(ext2, '')::int
+;
+
+alter table t
+alter column exc1 type int using exc1::integer
+	, alter column exc2 type int using exc2::integer
+	, alter column ext1 type int using ext1::integer
+	, alter column ext2 type int using ext2::integer
+;
+
+create table pizza_allnames as 
+select t.*  
+    , pz.pizza_name
+    , concat_ws(', ', pt.topping_name,
+		pt2.topping_name) as exclusion_name
+    , concat_ws(', ', et1.topping_name,
+		et2.topping_name) as extras_name
+from t
+left join pizza_runner.pizza_names pz
+on t.pizza_id = pz.pizza_id
+left join pizza_runner.pizza_toppings pt
+on t.exc1 = pt.topping_id
+left join pizza_runner.pizza_toppings pt2
+on t.exc2 = pt2.topping_id
+
+left join pizza_runner.pizza_toppings et1
+on t.ext1 = et1.topping_id
+left join pizza_runner.pizza_toppings et2
+on t.ext2 = et2.topping_id
+
+order by order_id;
+
+
+select (pizza_name || ' - Exclusion ' || exclusion_name || ' - Extras ' || extras_name) as full_name
+from pizza_allnames;
+
+
+
+
+
+
 -- 5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
 --  For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
 -- 6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
