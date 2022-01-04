@@ -279,7 +279,6 @@ from
 	where topping_id != '') as p
 inner join pizza_runner.pizza_toppings t
 on p.topping_id = t.topping_id
---group by p.pizza_id
 order by p.pizza_id, p.topping_id
 ;
 
@@ -362,6 +361,7 @@ Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers */
 
 create table t as
 select * 
+	, row_number() over (partition by  order_id order by order_id) as rnum
 	, split_part(exclusions, ',',1) as exc1
     , split_part(exclusions, ',',2) as exc2
     , split_part(extras, ',',1) as ext1
@@ -407,26 +407,192 @@ on t.ext2 = et2.topping_id
 order by order_id;
 
 
-select (pizza_name || ' - Exclusion ' || exclusion_name || ' - Extras ' || extras_name) as full_name
-from pizza_allnames;
-
-
-
-
+select concat(pizza_name, exclab, extlab) pizza_description
+from (
+	select pizza_name
+		, case when exclusion_name != '' then concat(' - Exclude ' , exclusion_name) else '' end as exclab
+		, case when extras_name != '' then concat(' - Extra ' , extras_name) else '' end as extlab
+	from pizza_allnames
+	) nam;
 
 
 -- 5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
 --  For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+
+--pizza_long table was created in exercise C.1
+create table ingredients as 
+select p.pizza_id,
+	p.topping_id,
+	t.topping_name
+from 
+	(select pizza_id, cast(topping_id as numeric)
+	from pizza_long
+	where topping_id != '') as p
+inner join pizza_runner.pizza_toppings t
+on p.topping_id = t.topping_id
+order by p.pizza_id, p.topping_id
+;
+
+
+create table tc as  
+select *
+	,case 
+    	when (exc1 = topping_id) or (exc2 = topping_id) then '' 
+    	else topping_name end as mod_topping
+from        
+(
+--expand table to length of base ingredients
+	(select nm.*
+		, topping_id
+		, topping_name
+   
+	from pizza_allnames nm --pizza_allnames created in exercise C4
+	left join ingredients ing
+	on nm.pizza_id = ing.pizza_id)
+-- add rows associated with extra 1
+union all
+	(select *
+	from pizza_allnames nm
+	inner join pizza_runner.pizza_toppings tp
+	on nm.ext1 = tp.topping_id ) 
+union all
+-- add rows associated with extra 2
+	(select *
+	from pizza_allnames nm
+	inner join pizza_runner.pizza_toppings tp
+	on nm.ext2 = tp.topping_id)
+) ad
+order by order_id, pizza_id, topping_id
+; 
+
+-- remove the excluded ingredients
+delete from tc
+where mod_topping = '';
+
+-- count the number of toppings
+create table qtops as
+select order_id
+	, customer_id
+	, rnum, pizza_name
+	, mod_topping
+	, count(*)
+from tc
+group by order_id, customer_id, rnum, pizza_name, mod_topping
+order by  mod_topping;
+
+-- Each pizza description with quantity of ingredients
+select order_id
+	, customer_id
+	, concat(pizza_name, ': ', string_agg(quant_topping, ' , '))
+from (
+	select *,
+		case when count > 1 then concat(count, 'x', mod_topping) else mod_topping end as quant_topping
+	from qtops
+	) quant
+group by order_id, customer_id, rnum, pizza_name
+order by order_id, customer_id, rnum, pizza_name;
+
+
+
 -- 6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+
+select mod_topping,
+	sum(count) as quantity
+from qtops
+inner join pizza_runner.runner_orders r 
+  	on qtops.order_id = r.order_id
+	where r.pickup_time != 'null'
+group by qtops.mod_topping
+order by quantity desc;
 
 /* --------------------
 D. Pricing and Ratings
    --------------------*/
    
 -- 1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes - how much money has Pizza Runner made so far if there are no delivery fees?
+
+select sum(base_cost)
+from(
+	select c.*,  
+		case when pizza_id = 1 then 12 else 10 end as base_cost
+	from pizza_runner.customer_orders c 
+		inner join pizza_runner.runner_orders r 
+		on c.order_id = r.order_id
+		where r.pickup_time != 'null'
+	) cst
+;
+
 -- 2. What if there was an additional $1 charge for any pizza extras?
 --  Add cheese is $1 extra
+
+--New profit with $1 charge for each extra topping
+with ct as (
+	select p.order_id
+		, p.customer_id
+		, p.rnum
+		, case when pizza_name = 'Meatlovers' then 12
+		else 10 end as base_cost
+		,case 
+		when (ext1 is not null and ext2 is null) then 1
+		when (ext1 is not null and ext2 is not null) then 2
+		else 0 end as extra_cost
+	from pizza_allnames p
+	inner join pizza_runner.runner_orders r 
+			on p.order_id = r.order_id
+			where r.pickup_time != 'null'
+	)
+select sum(base_cost + extra_cost)
+from ct
+;
+
+
+--New profit with $1 charge for each extra topping, and an additional $1 for extra cheese
+create table ct as 
+	select p.order_id
+		, p.customer_id
+		, p.rnum
+		, case 
+			when pizza_name = 'Meatlovers' then 12
+			else 10 end as base_cost
+		,case 
+			when (ext1 is not null and ext2 is null) then 1
+			when (ext1 is not null and ext2 is not null) then 2
+			else 0 end as extra_cost
+		, case 
+			when ext1 = 4 or ext2 = 4 then 1 else 0 end cheese
+	from pizza_allnames p
+	inner join pizza_runner.runner_orders r 
+			on p.order_id = r.order_id
+			where r.pickup_time != 'null'
+;
+	
+select sum(base_cost + extra_cost + cheese)
+from ct
+;
+
+
 -- 3. The Pizza Runner team now wants to add an additional ratings system that allows customers to rate their runner, how would you design an additional table for this new dataset - generate a schema for this new table and insert your own data for ratings for each successful customer order between 1 to 5.
+
+DROP TABLE IF EXISTS runner_rating;
+CREATE TABLE runner_rating (
+  "order_id" INTEGER,
+  "runner_id" INTEGER,
+  "rating" INTEGER
+);
+INSERT INTO runner_rating
+	("order_id", "runner_id", "rating")
+VALUES
+  ('1', '1', 2),
+  ('2', '1', 3),
+  ('3', '1', 4),
+  ('4', '2', 3),
+  ('5', '3', 5),
+  ('6', '3', NULL),
+  ('7', '2', 4),
+  ('8', '2', 4),
+  ('9', '2', NULL),
+  ('10', '1',5);
+  
 -- 4. Using your newly generated table - can you join all of the information together to form a table which has the following information for successful deliveries?
 /*customer_id
 order_id
@@ -438,11 +604,70 @@ Time between order and pickup
 Delivery duration
 Average speed
 Total number of pizzas */
--- 5. If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled - how much money does Pizza Runner have left over after these deliveries?
 
+create table delivery as 
+with cc as (
+	select distinct c.customer_id
+		, c.order_id
+		, r.runner_id
+		, rr.rating
+		, c.order_time
+		, to_timestamp(r.pickup_time, 'YYYY-MM-DD HH24:MI:SS') as pickup_time  
+		, NULLIF(regexp_replace(r.duration, '\D','','g'), '')::numeric as duration
+		, NULLIF(regexp_replace(r.distance, '[a-zA-Z]+','','g'), '')::numeric as distance
+
+	from pizza_runner.customer_orders c
+	inner join pizza_runner.runner_orders r 
+	on c.order_id = r.order_id
+	left join runner_rating rr
+	on r.order_id = rr.order_id and r.runner_id = rr.runner_id
+	where r.pickup_time != 'null'
+	order by order_id)
+select customer_id
+	, cc.order_id
+	, runner_id
+	, rating
+	, order_time
+    , pickup_time
+	, extract(minute from(pickup_time - order_time)) time_btw_order_pickup
+    , duration
+    , distance
+    , round(distance/duration, 2) as km_per_min
+    , number_pizza
+from cc    
+inner join (
+	select order_id
+		, count(*) as number_pizza
+	from pizza_runner.customer_orders
+	group by order_id
+	) cnt
+on cc.order_id = cnt.order_id
+;
+
+
+
+-- 5. If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled - how much money does Pizza Runner have left over after these deliveries?
+select delivery.order_id
+	, base_cost - (0.3 * distance) as profit
+from delivery
+inner join (
+	select order_id, sum(base_cost) as base_cost
+	from ct
+	group by order_id
+	) base
+on delivery.order_id = base.order_id
+;
 
 /* --------------------
 E. Bonus Questions
    --------------------*/
 -- If Danny wants to expand his range of pizzas - how would this impact the existing data design? Write an INSERT statement to demonstrate what would happen if a new Supreme pizza with all the toppings was added to the Pizza Runner menu?
+INSERT INTO pizza_runner.pizza_names
+  ("pizza_id", "pizza_name")
+VALUES
+  (3, 'Supreme');
 
+INSERT INTO pizza_runner.pizza_recipes
+  ("pizza_id", "toppings")
+VALUES
+  (1, '1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12');
